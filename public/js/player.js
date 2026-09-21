@@ -1,13 +1,12 @@
-// Local Player FPS Controller & Remote Player Renderer
+// High Performance Local Player & Remote Player Controller
 class LocalPlayer {
-  constructor(camera, domElement, mapColliders) {
+  constructor(camera, domElement, colliders) {
     this.camera = camera;
     this.domElement = domElement;
-    this.colliders = mapColliders;
+    this.colliders = colliders;
 
-    // Player State
     this.position = new THREE.Vector3(0, 1.6, 0);
-    this.velocity = new THREE.Vector3();
+    this.velocity = new THREE.Vector3(0, 0, 0);
     this.rotationY = 0;
     this.pitch = 0;
 
@@ -15,249 +14,188 @@ class LocalPlayer {
     this.armor = 50;
     this.isDead = false;
 
-    // Movement flags
-    this.keys = { forward: false, backward: false, left: false, right: false, sprint: false, crouch: false, jump: false };
+    this.keys = { W: false, A: false, S: false, D: false, Shift: false, Crouch: false, Space: false };
     this.isCrouching = false;
     this.isSprinting = false;
+    this.isGrounded = true;
 
-    // Physics constants
-    this.normalHeight = 1.6;
-    this.crouchHeight = 1.0;
-    this.currentHeight = 1.6;
-    this.walkSpeed = 6.0;
-    this.sprintSpeed = 10.5;
-    this.crouchSpeed = 3.5;
-    this.gravity = 25.0;
-    this.jumpForce = 8.5;
-    this.isGrounded = false;
-
-    // Footstep timer
     this.footstepTimer = 0;
 
-    this.initControls();
+    this.initInput();
   }
 
-  initControls() {
-    // Pointer Lock setup
+  initInput() {
     document.addEventListener('mousemove', (e) => {
       if (document.pointerLockElement !== this.domElement || this.isDead) return;
-
       const sensitivity = 0.0022;
       this.rotationY -= e.movementX * sensitivity;
       this.pitch -= e.movementY * sensitivity;
-
-      // Clamp pitch (-89deg to +89deg)
       this.pitch = Math.max(-Math.PI / 2.05, Math.min(Math.PI / 2.05, this.pitch));
     });
 
-    // Keyboard Listeners
-    window.addEventListener('keydown', (e) => this.handleKey(e.code, true));
-    window.addEventListener('keyup', (e) => this.handleKey(e.code, false));
+    window.addEventListener('keydown', (e) => this.setKeyState(e.code, true));
+    window.addEventListener('keyup', (e) => this.setKeyState(e.code, false));
   }
 
-  handleKey(code, isPressed) {
-    switch (code) {
-      case 'KeyW': this.keys.forward = isPressed; break;
-      case 'KeyS': this.keys.backward = isPressed; break;
-      case 'KeyA': this.keys.left = isPressed; break;
-      case 'KeyD': this.keys.right = isPressed; break;
-      case 'ShiftLeft': this.keys.sprint = isPressed; break;
-      case 'KeyC': this.keys.crouch = isPressed; break;
-      case 'Space':
-        if (isPressed && this.isGrounded && !this.isDead) {
-          this.velocity.y = this.jumpForce;
-          this.isGrounded = false;
-        }
-        break;
+  setKeyState(code, state) {
+    if (code === 'KeyW') this.keys.W = state;
+    if (code === 'KeyS') this.keys.S = state;
+    if (code === 'KeyA') this.keys.A = state;
+    if (code === 'KeyD') this.keys.D = state;
+    if (code === 'ShiftLeft') this.keys.Shift = state;
+    if (code === 'KeyC') this.keys.Crouch = state;
+    if (code === 'Space' && state && this.isGrounded && !this.isDead) {
+      this.velocity.y = 9.0;
+      this.isGrounded = false;
     }
   }
 
   update(dt) {
     if (this.isDead) return;
 
-    // Crouch & Height adjustment
-    this.isCrouching = this.keys.crouch;
-    this.isSprinting = this.keys.sprint && !this.isCrouching && this.keys.forward;
+    this.isCrouching = this.keys.Crouch;
+    this.isSprinting = this.keys.Shift && !this.isCrouching && this.keys.W;
 
-    const targetHeight = this.isCrouching ? this.crouchHeight : this.normalHeight;
-    this.currentHeight += (targetHeight - this.currentHeight) * dt * 10;
+    const eyeHeight = this.isCrouching ? 1.0 : 1.6;
 
-    // Calculate movement speed
-    let speed = this.walkSpeed;
-    if (this.isSprinting) speed = this.sprintSpeed;
-    if (this.isCrouching) speed = this.crouchSpeed;
+    // Movement Direction
+    let speed = this.isSprinting ? 10.0 : (this.isCrouching ? 3.5 : 6.0);
+    const inputDir = new THREE.Vector3();
+    if (this.keys.W) inputDir.z -= 1;
+    if (this.keys.S) inputDir.z += 1;
+    if (this.keys.A) inputDir.x -= 1;
+    if (this.keys.D) inputDir.x += 1;
+    inputDir.normalize();
 
-    // Calculate direction vector from input
-    const moveDir = new THREE.Vector3();
-    if (this.keys.forward) moveDir.z -= 1;
-    if (this.keys.backward) moveDir.z += 1;
-    if (this.keys.left) moveDir.x -= 1;
-    if (this.keys.right) moveDir.x += 1;
-    moveDir.normalize();
-
-    // Rotate direction by camera yaw
+    // Rotate input vector by camera Yaw
     const sin = Math.sin(this.rotationY);
     const cos = Math.cos(this.rotationY);
-    const worldDX = moveDir.x * cos + moveDir.z * sin;
-    const worldDZ = -moveDir.x * sin + moveDir.z * cos;
+    const worldX = inputDir.x * cos + inputDir.z * sin;
+    const worldZ = -inputDir.x * sin + inputDir.z * cos;
 
-    // Horizontal movement damping & velocity
-    this.velocity.x = worldDX * speed;
-    this.velocity.z = worldDZ * speed;
+    // Smooth Velocity Interpolation (Butter Smooth Control)
+    this.velocity.x += (worldX * speed - this.velocity.x) * dt * 15;
+    this.velocity.z += (worldZ * speed - this.velocity.z) * dt * 15;
 
-    // Apply Gravity
-    this.velocity.y -= this.gravity * dt;
+    // Gravity
+    this.velocity.y -= 25.0 * dt;
 
-    // Proposed next position
-    const nextX = this.position.x + this.velocity.x * dt;
-    const nextY = this.position.y + this.velocity.y * dt;
-    const nextZ = this.position.z + this.velocity.z * dt;
+    // Next proposed position
+    let nextX = this.position.x + this.velocity.x * dt;
+    let nextY = this.position.y + this.velocity.y * dt;
+    let nextZ = this.position.z + this.velocity.z * dt;
 
-    // Collision Detection & Floor Check
-    this.checkCollisions(nextX, nextY, nextZ);
+    // Map Boundaries & Ground Check
+    const BOUND = 55;
+    nextX = Math.max(-BOUND, Math.min(BOUND, nextX));
+    nextZ = Math.max(-BOUND, Math.min(BOUND, nextZ));
+
+    if (nextY <= 0) {
+      nextY = 0;
+      this.velocity.y = 0;
+      this.isGrounded = true;
+    }
+
+    // AABB Collision Detection against obstacles
+    const playerRadius = 0.45;
+    const playerBox = new THREE.Box3(
+      new THREE.Vector3(nextX - playerRadius, nextY, nextZ - playerRadius),
+      new THREE.Vector3(nextX + playerRadius, nextY + eyeHeight, nextZ + playerRadius)
+    );
+
+    for (let collider of this.colliders) {
+      if (collider.intersectsBox(playerBox)) {
+        // Wall Slide Response
+        nextX = this.position.x;
+        nextZ = this.position.z;
+        break;
+      }
+    }
+
+    this.position.set(nextX, nextY, nextZ);
 
     // Apply Camera Position & Rotation
-    this.camera.position.set(this.position.x, this.position.y + this.currentHeight, this.position.z);
+    this.camera.position.set(this.position.x, this.position.y + eyeHeight, this.position.z);
     this.camera.rotation.set(0, 0, 0);
     this.camera.rotation.y = this.rotationY;
     this.camera.rotation.x = this.pitch;
 
-    // Footsteps sound trigger
-    if (this.isGrounded && moveDir.lengthSq() > 0) {
-      this.footstepTimer += dt * (this.isSprinting ? 2.5 : 1.5);
-      if (this.footstepTimer > 1.0) {
+    // Footsteps
+    if (this.isGrounded && inputDir.lengthSq() > 0) {
+      this.footstepTimer += dt * (this.isSprinting ? 2.8 : 1.8);
+      if (this.footstepTimer >= 1.0) {
         this.footstepTimer = 0;
         window.soundEngine.playFootstep();
       }
     }
   }
 
-  checkCollisions(nextX, nextY, nextZ) {
-    // Ground Check
-    const minHeight = 0; // ground plane
-    if (nextY <= minHeight) {
-      this.position.y = minHeight;
-      this.velocity.y = 0;
-      this.isGrounded = true;
-    } else {
-      this.position.y = nextY;
-    }
-
-    // Player bounding cylinder/box test against map colliders
-    const playerRadius = 0.5;
-    const playerBox = new THREE.Box3(
-      new THREE.Vector3(nextX - playerRadius, this.position.y, nextZ - playerRadius),
-      new THREE.Vector3(nextX + playerRadius, this.position.y + this.currentHeight, nextZ + playerRadius)
-    );
-
-    let collideX = false;
-    let collideZ = false;
-
-    for (let box of this.colliders) {
-      if (box.intersectsBox(playerBox)) {
-        // Simple slide response
-        collideX = true;
-        collideZ = true;
-        break;
-      }
-    }
-
-    if (!collideX) this.position.x = nextX;
-    if (!collideZ) this.position.z = nextZ;
-  }
-
   takeDamage(amount) {
     if (this.isDead) return;
-
-    if (this.armor > 0) {
-      const absorb = Math.min(this.armor, amount * 0.5);
-      this.armor -= absorb;
-      amount -= absorb;
-    }
-    this.health = Math.max(0, this.health - amount);
-
-    // Trigger red flash UI
-    const flash = document.getElementById('damage-flash');
-    flash.classList.add('active');
-    setTimeout(() => flash.classList.remove('active'), 150);
-
-    // Update HUD bars
     this.updateHUD();
 
-    if (this.health <= 0) {
-      this.isDead = true;
+    const flash = document.getElementById('damage-flash');
+    if (flash) {
+      flash.classList.add('active');
+      setTimeout(() => flash.classList.remove('active'), 120);
     }
   }
 
   updateHUD() {
-    document.getElementById('health-fill').style.width = `${this.health}%`;
-    document.getElementById('health-val').innerText = Math.round(this.health);
-    document.getElementById('armor-fill').style.width = `${this.armor}%`;
-    document.getElementById('armor-val').innerText = Math.round(this.armor);
+    const hpFill = document.getElementById('health-fill');
+    const hpVal = document.getElementById('health-val');
+    const armFill = document.getElementById('armor-fill');
+    const armVal = document.getElementById('armor-val');
+
+    if (hpFill) hpFill.style.width = `${this.health}%`;
+    if (hpVal) hpVal.innerText = Math.round(this.health);
+    if (armFill) armFill.style.width = `${this.armor}%`;
+    if (armVal) armVal.innerText = Math.round(this.armor);
   }
 }
 
-// Remote Player / Bot Renderer Class
+// Remote Player Renderer with Smooth Snapshot Interpolation
 class RemotePlayer {
-  constructor(scene, playerData) {
+  constructor(scene, data) {
     this.scene = scene;
-    this.id = playerData.id;
-    this.name = playerData.name;
-    this.isBot = playerData.isBot;
+    this.id = data.id;
+    this.name = data.name;
 
-    // Target positions for interpolation
-    this.targetPos = new THREE.Vector3(playerData.x, playerData.y, playerData.z);
-    this.targetRotY = playerData.rotationY || 0;
-    this.targetPitch = playerData.pitch || 0;
+    this.targetPos = new THREE.Vector3(data.x, data.y, data.z);
+    this.targetRotY = data.rotationY || 0;
 
     this.meshGroup = new THREE.Group();
+    this.meshGroup.position.copy(this.targetPos);
     this.buildCharacterMesh();
     this.scene.add(this.meshGroup);
   }
 
   buildCharacterMesh() {
-    const armorColor = this.isBot ? 0xd97706 : 0x00f0ff;
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5 });
-    const vestMat = new THREE.MeshStandardMaterial({ color: armorColor, roughness: 0.3, metalness: 0.7 });
-    const skinMat = new THREE.MeshStandardMaterial({ color: 0xfbcfe8, roughness: 0.8 });
+    const vestMat = new THREE.MeshStandardMaterial({ color: 0x00f0ff, roughness: 0.3, metalness: 0.8 });
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.6 });
     const helmetMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.3 });
+    const skinMat = new THREE.MeshStandardMaterial({ color: 0xfbcfe8 });
 
-    // Torso
+    // Body
     const torso = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.75, 0.35), vestMat);
-    torso.position.y = 1.0;
-    torso.castShadow = true;
+    torso.position.y = 0.95;
     this.meshGroup.add(torso);
 
-    // Head + Helmet
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.18, 16, 16), skinMat);
-    head.position.y = 1.52;
-    head.castShadow = true;
+    // Head & Helmet
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 12), skinMat);
+    head.position.y = 1.5;
     this.meshGroup.add(head);
 
-    const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 16, 0, Math.PI * 2, 0, Math.PI * 0.6), helmetMat);
-    helmet.position.y = 1.54;
+    const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 12, 0, Math.PI * 2, 0, Math.PI * 0.6), helmetMat);
+    helmet.position.y = 1.52;
     this.meshGroup.add(helmet);
 
-    // Arms
-    const lArm = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.6, 0.18), bodyMat);
-    lArm.position.set(-0.4, 1.0, 0);
-    lArm.castShadow = true;
-    this.meshGroup.add(lArm);
-
-    const rArm = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.6, 0.18), bodyMat);
-    rArm.position.set(0.4, 1.0, 0);
-    rArm.castShadow = true;
-    this.meshGroup.add(rArm);
-
     // Legs
-    const lLeg = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.7, 0.22), bodyMat);
-    lLeg.position.set(-0.16, 0.35, 0);
-    lLeg.castShadow = true;
+    const lLeg = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.65, 0.22), bodyMat);
+    lLeg.position.set(-0.16, 0.33, 0);
+    const rLeg = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.65, 0.22), bodyMat);
+    rLeg.position.set(0.16, 0.33, 0);
     this.meshGroup.add(lLeg);
-
-    const rLeg = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.7, 0.22), bodyMat);
-    rLeg.position.set(0.16, 0.35, 0);
-    rLeg.castShadow = true;
     this.meshGroup.add(rLeg);
 
     // Name Tag Canvas Sprite
@@ -268,7 +206,7 @@ class RemotePlayer {
     ctx.fillStyle = 'rgba(8, 14, 26, 0.85)';
     ctx.fillRect(0, 0, 256, 64);
     ctx.font = 'bold 26px Rajdhani';
-    ctx.fillStyle = this.isBot ? '#f59e0b' : '#00f0ff';
+    ctx.fillStyle = '#00f0ff';
     ctx.textAlign = 'center';
     ctx.fillText(this.name, 128, 42);
 
@@ -283,12 +221,11 @@ class RemotePlayer {
   updateData(data) {
     this.targetPos.set(data.x, data.y, data.z);
     this.targetRotY = data.rotationY || 0;
-    this.targetPitch = data.pitch || 0;
   }
 
   interpolate(dt) {
-    // Smooth interpolation (LERP)
-    this.meshGroup.position.lerp(this.targetPos, dt * 15);
+    // Ultra smooth lerp for 60fps movement
+    this.meshGroup.position.lerp(this.targetPos, dt * 18);
     this.meshGroup.rotation.y = this.targetRotY;
   }
 

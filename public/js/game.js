@@ -1,28 +1,25 @@
-// Tactical Strike 3D - Main Game Engine Entry Point
+// Tactical Strike 3D - High-FPS Main Game Engine
 class GameEngine {
   constructor() {
     this.container = document.getElementById('game-container');
     this.clock = new THREE.Clock();
 
-    // Scene & Camera
+    // 1. Scene & Camera
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500);
+    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 400);
 
-    // Renderer
+    // 2. High-Performance WebGL Renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.container.appendChild(this.renderer.domElement);
 
-    // Subsystems
+    // 3. Game Subsystems
     this.map = new TacticalMap(this.scene);
     this.localPlayer = new LocalPlayer(this.camera, this.renderer.domElement, this.map.colliders);
     this.weaponManager = new WeaponManager(this.scene, this.camera);
     this.networkManager = new NetworkManager(this);
 
-    // UI & Controls State
     this.isPlaying = false;
     this.selectedWeapon = 'rifle';
 
@@ -30,7 +27,6 @@ class GameEngine {
     this.initInputListeners();
     this.initRadar();
 
-    // Resize listener
     window.addEventListener('resize', () => this.onWindowResize());
   }
 
@@ -39,7 +35,6 @@ class GameEngine {
     const nameInput = document.getElementById('player-name-input');
     const weaponCards = document.querySelectorAll('.weapon-card');
 
-    // Weapon Selection
     weaponCards.forEach(card => {
       card.addEventListener('click', () => {
         weaponCards.forEach(c => c.classList.remove('active'));
@@ -48,16 +43,13 @@ class GameEngine {
       });
     });
 
-    // Deploy / Join Click
     btnJoin.addEventListener('click', () => {
       const callsign = nameInput.value || 'Operator';
       document.getElementById('lobby-screen').classList.add('hidden');
       document.getElementById('hud-overlay').classList.remove('hud-hidden');
 
-      // Request Pointer Lock
       this.renderer.domElement.requestPointerLock();
 
-      // Connect to Socket Server
       this.networkManager.connect(callsign, this.selectedWeapon);
       this.weaponManager.switchWeapon(this.selectedWeapon);
 
@@ -68,14 +60,12 @@ class GameEngine {
   initInputListeners() {
     const dom = this.renderer.domElement;
 
-    // PointerLock re-engage click
     dom.addEventListener('click', () => {
       if (this.isPlaying && !this.localPlayer.isDead && document.pointerLockElement !== dom) {
         dom.requestPointerLock();
       }
     });
 
-    // Mouse Down (Fire & ADS)
     window.addEventListener('mousedown', (e) => {
       if (!this.isPlaying || this.localPlayer.isDead || document.pointerLockElement !== dom) return;
 
@@ -92,10 +82,8 @@ class GameEngine {
       }
     });
 
-    // Prevent context menu on right click
     window.addEventListener('contextmenu', (e) => e.preventDefault());
 
-    // Keyboard bindings (1-4 weapon switch, R reload, Tab scoreboard, T chat)
     window.addEventListener('keydown', (e) => {
       if (!this.isPlaying) return;
 
@@ -111,35 +99,37 @@ class GameEngine {
         this.weaponManager.switchWeapon('pistol');
       } else if (e.code === 'Tab') {
         e.preventDefault();
-        document.getElementById('scoreboard-modal').classList.remove('hidden');
+        const scoreModal = document.getElementById('scoreboard-modal');
+        if (scoreModal) scoreModal.classList.remove('hidden');
       } else if (e.code === 'KeyT') {
         e.preventDefault();
         const chatInput = document.getElementById('chat-input');
-        chatInput.focus();
+        if (chatInput) chatInput.focus();
       }
     });
 
     window.addEventListener('keyup', (e) => {
       if (e.code === 'Tab') {
-        document.getElementById('scoreboard-modal').classList.add('hidden');
+        const scoreModal = document.getElementById('scoreboard-modal');
+        if (scoreModal) scoreModal.classList.add('hidden');
       }
     });
 
-    // Chat Input Enter
     const chatInput = document.getElementById('chat-input');
-    chatInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && chatInput.value.trim().length > 0) {
-        this.networkManager.sendChat(chatInput.value.trim());
-        chatInput.value = '';
-        chatInput.blur();
-        dom.requestPointerLock();
-      }
-    });
+    if (chatInput) {
+      chatInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && chatInput.value.trim().length > 0) {
+          this.networkManager.sendChat(chatInput.value.trim());
+          chatInput.value = '';
+          chatInput.blur();
+          dom.requestPointerLock();
+        }
+      });
+    }
   }
 
   tryShoot() {
-    const fired = this.weaponManager.shoot((weaponKey) => {
-      // Calculate shooting ray direction
+    this.weaponManager.shoot((weaponKey) => {
       const dir = new THREE.Vector3();
       this.camera.getWorldDirection(dir);
       const origin = new THREE.Vector3();
@@ -155,6 +145,7 @@ class GameEngine {
 
   showHitmarker(isHeadshot) {
     const hm = document.getElementById('hitmarker');
+    if (!hm) return;
     hm.className = 'active' + (isHeadshot ? ' headshot' : '');
     window.soundEngine.playHitmarker(isHeadshot);
 
@@ -198,6 +189,7 @@ class GameEngine {
     const text = document.getElementById('killed-by-text');
     const countdown = document.getElementById('respawn-countdown');
 
+    if (!screen) return;
     text.innerText = `Killed by ${killerName || 'Enemy'}`;
     screen.classList.remove('hidden');
 
@@ -215,7 +207,9 @@ class GameEngine {
 
   initRadar() {
     this.radarCanvas = document.getElementById('radar-canvas');
-    this.radarCtx = this.radarCanvas.getContext('2d');
+    if (this.radarCanvas) {
+      this.radarCtx = this.radarCanvas.getContext('2d');
+    }
   }
 
   drawRadar() {
@@ -225,11 +219,11 @@ class GameEngine {
     const h = 120;
     const cx = w / 2;
     const cy = h / 2;
-    const scale = 0.8; // map units to radar pixels
+    const scale = 0.8;
 
     ctx.clearRect(0, 0, w, h);
 
-    // Radar background rings
+    // Radar Grid
     ctx.strokeStyle = 'rgba(0, 240, 255, 0.2)';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -237,15 +231,9 @@ class GameEngine {
     ctx.arc(cx, cy, 30, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Cross lines
-    ctx.beginPath();
-    ctx.moveTo(cx, 0); ctx.lineTo(cx, h);
-    ctx.moveTo(0, cy); ctx.lineTo(w, cy);
-    ctx.stroke();
-
     const localPos = this.localPlayer.position;
 
-    // Draw Remote Players & Bots on Radar
+    // Draw Remote Players
     Object.values(this.networkManager.remotePlayers).forEach(rp => {
       const dx = (rp.targetPos.x - localPos.x) * scale;
       const dz = (rp.targetPos.z - localPos.z) * scale;
@@ -253,7 +241,7 @@ class GameEngine {
       const ry = cy + dz;
 
       if (rx >= 0 && rx <= w && ry >= 0 && ry <= h) {
-        ctx.fillStyle = rp.isBot ? '#f59e0b' : '#ff4757';
+        ctx.fillStyle = '#ff4757';
         ctx.beginPath();
         ctx.arc(rx, ry, 3.5, 0, Math.PI * 2);
         ctx.fill();
@@ -266,7 +254,6 @@ class GameEngine {
     ctx.arc(cx, cy, 4, 0, Math.PI * 2);
     ctx.fill();
 
-    // Direction Line
     const dirX = Math.sin(this.localPlayer.rotationY) * 12;
     const dirZ = -Math.cos(this.localPlayer.rotationY) * 12;
     ctx.strokeStyle = '#00f0ff';
@@ -286,19 +273,16 @@ class GameEngine {
   start() {
     const loop = () => {
       requestAnimationFrame(loop);
-      const dt = Math.min(this.clock.getDelta(), 0.1);
+      const dt = Math.min(this.clock.getDelta(), 0.05);
 
       if (this.isPlaying) {
-        // Update physics & local player
         this.localPlayer.update(dt);
         this.weaponManager.update(dt);
         this.map.updatePickups(dt);
 
-        // Network update
         this.networkManager.sendUpdate(this.localPlayer);
         this.networkManager.update(dt);
 
-        // Render Radar
         this.drawRadar();
       }
 
@@ -308,7 +292,6 @@ class GameEngine {
   }
 }
 
-// Instantiate engine when DOM is ready
 window.addEventListener('DOMContentLoaded', () => {
   const game = new GameEngine();
   game.start();

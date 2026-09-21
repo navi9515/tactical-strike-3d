@@ -5,171 +5,78 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: '*' }
-});
-
+const io = new Server(server, { cors: { origin: '*' } });
 const PORT = process.env.PORT || 3000;
 
-// Serve static frontend files
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Game state (Pure Human Multiplayer - NO BOTS)
+// Game State
 const players = {};
-const pickups = [];
-const MAP_BOUNDS = { minX: -60, maxX: 60, minZ: -60, maxZ: 60 };
-
-// Spawns configuration
-const SPAWN_POINTS = [
-  { x: -45, y: 1.6, z: -45 },
-  { x: 45, y: 1.6, z: -45 },
-  { x: -45, y: 1.6, z: 45 },
-  { x: 45, y: 1.6, z: 45 },
-  { x: 0, y: 1.6, z: -45 },
-  { x: 0, y: 1.6, z: 45 },
-  { x: -45, y: 1.6, z: 0 },
-  { x: 45, y: 1.6, z: 0 },
-  { x: 0, y: 10, z: 0 } // Sniper tower top
+const pickups = [
+  { id: 'hp1', type: 'health', x: -15, y: 0.5, z: -15, respawnTimer: 0 },
+  { id: 'hp2', type: 'health', x: 15, y: 0.5, z: 15, respawnTimer: 0 },
+  { id: 'arm1', type: 'armor', x: -15, y: 0.5, z: 15, respawnTimer: 0 },
+  { id: 'arm2', type: 'armor', x: 15, y: 0.5, z: -15, respawnTimer: 0 },
+  { id: 'ammo1', type: 'ammo', x: 0, y: 0.5, z: 0, respawnTimer: 0 }
 ];
 
-// Initial Pickups
-const INITIAL_PICKUPS = [
-  { id: 'hp_1', type: 'health', x: -20, y: 0.5, z: -20, respawnTimer: 0 },
-  { id: 'hp_2', type: 'health', x: 20, y: 0.5, z: 20, respawnTimer: 0 },
-  { id: 'arm_1', type: 'armor', x: -20, y: 0.5, z: 20, respawnTimer: 0 },
-  { id: 'arm_2', type: 'armor', x: 20, y: 0.5, z: -20, respawnTimer: 0 },
-  { id: 'ammo_1', type: 'ammo', x: 0, y: 0.5, z: -30, respawnTimer: 0 },
-  { id: 'ammo_2', type: 'ammo', x: 0, y: 0.5, z: 30, respawnTimer: 0 },
-  { id: 'hp_tower', type: 'health', x: 0, y: 10.5, z: 0, respawnTimer: 0 }
+const SPAWNS = [
+  { x: -25, y: 1.6, z: -25 },
+  { x: 25, y: 1.6, z: -25 },
+  { x: -25, y: 1.6, z: 25 },
+  { x: 25, y: 1.6, z: 25 },
+  { x: 0, y: 1.6, z: -30 },
+  { x: 0, y: 1.6, z: 30 }
 ];
-
-INITIAL_PICKUPS.forEach(p => pickups.push({ ...p }));
-
-// Weapons Data
-const WEAPONS = {
-  rifle: { name: 'Assault Rifle', damage: 24, headshotMult: 2.2, fireRate: 110, spread: 0.02 },
-  sniper: { name: 'Sniper Rifle', damage: 85, headshotMult: 2.5, fireRate: 900, spread: 0.005 },
-  shotgun: { name: 'Shotgun', damage: 14, headshotMult: 1.5, fireRate: 750, spread: 0.08, pellets: 8 },
-  pistol: { name: 'Tactical Pistol', damage: 20, headshotMult: 2.0, fireRate: 200, spread: 0.03 }
-};
 
 function getRandomSpawn() {
-  const p = SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)];
-  return { x: p.x + (Math.random() - 0.5) * 4, y: p.y, z: p.z + (Math.random() - 0.5) * 4 };
+  const p = SPAWNS[Math.floor(Math.random() * SPAWNS.length)];
+  return { x: p.x + (Math.random() - 0.5) * 2, y: p.y, z: p.z + (Math.random() - 0.5) * 2 };
 }
 
-// Shot logic & collision validation (Real Players ONLY)
-function executeShot(shooter, shotData) {
-  const w = WEAPONS[shotData.weapon] || WEAPONS.rifle;
+// Ray-Cylinder Hit Test for precision shooting
+function checkRayPlayerHit(rayOrigin, rayDir, target) {
+  // Target Bounding Cylinder
+  const targetPos = { x: target.x, y: target.y + 0.9, z: target.z };
+  const radius = 0.6;
+  const height = 1.8;
 
-  // Broadcast shoot event to all clients so they render opponent muzzle & sound
-  io.emit('weaponFired', {
-    shooterId: shooter.id,
-    weapon: shotData.weapon,
-    origin: shotData.origin,
-    direction: shotData.direction
-  });
+  // Vector from origin to target center
+  const dx = targetPos.x - rayOrigin.x;
+  const dy = targetPos.y - rayOrigin.y;
+  const dz = targetPos.z - rayOrigin.z;
 
-  // Target list contains ONLY real human players who opened website
-  const targets = Object.values(players);
+  // Projection along ray direction
+  const t = dx * rayDir.x + dy * rayDir.y + dz * rayDir.z;
+  if (t < 0 || t > 100) return null; // Behind shooter or out of range
 
-  targets.forEach(target => {
-    if (target.id === shooter.id || target.health <= 0) return;
+  // Closest point on ray
+  const closestX = rayOrigin.x + rayDir.x * t;
+  const closestY = rayOrigin.y + rayDir.y * t;
+  const closestZ = rayOrigin.z + rayDir.z * t;
 
-    // Hit distance test
-    const dx = target.x - shotData.origin.x;
-    const dz = target.z - shotData.origin.z;
-    const dist2D = Math.sqrt(dx * dx + dz * dz);
+  // Distance from closest point to target center
+  const distSq = (closestX - targetPos.x) ** 2 + (closestZ - targetPos.z) ** 2;
+  const verticalDiff = Math.abs(closestY - targetPos.y);
 
-    if (dist2D > 60) return; // Max range
+  if (distSq <= radius * radius && verticalDiff <= height / 2) {
+    const isHeadshot = closestY > (target.y + 1.4);
+    return { hit: true, distance: t, isHeadshot };
+  }
 
-    // Check angle alignment
-    const shotAngle = Math.atan2(shotData.direction.x, shotData.direction.z);
-    const targetAngle = Math.atan2(dx, dz);
-    const angleDiff = Math.abs(shotAngle - targetAngle);
-
-    if (angleDiff < 0.18 || angleDiff > Math.PI * 2 - 0.18) {
-      // Hit detected on real opponent!
-      const isHeadshot = Math.random() < 0.25; // 25% headshot multiplier
-      let rawDamage = w.damage * (isHeadshot ? w.headshotMult : 1.0);
-      
-      // Armor reduction
-      if (target.armor > 0) {
-        const armorAbsorb = Math.min(target.armor, rawDamage * 0.5);
-        target.armor -= armorAbsorb;
-        rawDamage -= armorAbsorb;
-      }
-
-      target.health = Math.max(0, target.health - rawDamage);
-
-      // Send hit notification to shooter socket
-      io.to(shooter.id).emit('hitConfirmed', {
-        targetId: target.id,
-        damage: Math.round(rawDamage),
-        isHeadshot,
-        isKill: target.health <= 0
-      });
-
-      // Notify hit target
-      io.to(target.id).emit('playerHit', {
-        targetId: target.id,
-        health: target.health,
-        armor: target.armor,
-        shooterId: shooter.id
-      });
-
-      // Handle Kill
-      if (target.health <= 0) {
-        shooter.kills += 1;
-        shooter.score += isHeadshot ? 150 : 100;
-        target.deaths += 1;
-
-        io.emit('killFeed', {
-          killerId: shooter.id,
-          killerName: shooter.name,
-          victimId: target.id,
-          victimName: target.name,
-          weapon: shotData.weapon,
-          isHeadshot
-        });
-
-        // Respawn timer
-        setTimeout(() => {
-          if (players[target.id]) {
-            const spawn = getRandomSpawn();
-            target.health = 100;
-            target.armor = 50;
-            target.x = spawn.x;
-            target.y = spawn.y;
-            target.z = spawn.z;
-            io.emit('playerRespawned', {
-              id: target.id,
-              x: target.x,
-              y: target.y,
-              z: target.z,
-              health: 100,
-              armor: 50
-            });
-          }
-        }, 3000);
-      }
-    }
-  });
+  return null;
 }
 
-// Socket Connection handling for real users
 io.on('connection', (socket) => {
-  console.log(`Real player connected: ${socket.id}`);
+  console.log(`Player connected: ${socket.id}`);
 
-  // Handle player join request
   socket.on('joinGame', (data) => {
     const spawn = getRandomSpawn();
-    const playerName = (data && data.name && data.name.trim()) ? data.name.trim().substring(0, 15) : `Operator_${socket.id.substring(0, 4)}`;
+    const name = (data && data.name && data.name.trim()) ? data.name.trim().substring(0, 15) : `Operator_${socket.id.substring(0, 4)}`;
 
     players[socket.id] = {
       id: socket.id,
-      name: playerName,
-      isBot: false,
+      name: name,
       x: spawn.x,
       y: spawn.y,
       z: spawn.z,
@@ -185,18 +92,15 @@ io.on('connection', (socket) => {
       isSprinting: false
     };
 
-    // Send full init state to joining player
     socket.emit('initGameState', {
       selfId: socket.id,
       players: players,
       pickups: pickups
     });
 
-    // Notify other players
     socket.broadcast.emit('playerJoined', players[socket.id]);
   });
 
-  // Handle position/state updates from client
   socket.on('playerUpdate', (data) => {
     const p = players[socket.id];
     if (!p || p.health <= 0) return;
@@ -211,15 +115,98 @@ io.on('connection', (socket) => {
     p.weapon = data.weapon || p.weapon;
   });
 
-  // Handle shoot event from client
   socket.on('shoot', (shotData) => {
-    const p = players[socket.id];
-    if (!p || p.health <= 0) return;
+    const shooter = players[socket.id];
+    if (!shooter || shooter.health <= 0) return;
 
-    executeShot(p, shotData);
+    // Broadcast shoot sound/tracer to other players
+    socket.broadcast.emit('weaponFired', {
+      shooterId: shooter.id,
+      weapon: shotData.weapon,
+      origin: shotData.origin,
+      direction: shotData.direction
+    });
+
+    // Check hit against all real players
+    let closestHit = null;
+    let closestDist = Infinity;
+    let hitTarget = null;
+
+    Object.values(players).forEach(target => {
+      if (target.id === shooter.id || target.health <= 0) return;
+
+      const hitInfo = checkRayPlayerHit(shotData.origin, shotData.direction, target);
+      if (hitInfo && hitInfo.distance < closestDist) {
+        closestDist = hitInfo.distance;
+        closestHit = hitInfo;
+        hitTarget = target;
+      }
+    });
+
+    if (hitTarget && closestHit) {
+      // Calculate damage
+      const baseDamage = shotData.weapon === 'sniper' ? 85 : (shotData.weapon === 'shotgun' ? 50 : 25);
+      const isHead = closestHit.isHeadshot;
+      let damage = baseDamage * (isHead ? 2.0 : 1.0);
+
+      // Apply armor reduction
+      if (hitTarget.armor > 0) {
+        const absorb = Math.min(hitTarget.armor, damage * 0.4);
+        hitTarget.armor -= absorb;
+        damage -= absorb;
+      }
+
+      hitTarget.health = Math.max(0, hitTarget.health - damage);
+
+      // Send hit confirmed to shooter
+      socket.emit('hitConfirmed', {
+        targetId: hitTarget.id,
+        damage: Math.round(damage),
+        isHeadshot: isHead,
+        isKill: hitTarget.health <= 0
+      });
+
+      // Send damage update to target
+      io.to(hitTarget.id).emit('playerHit', {
+        health: hitTarget.health,
+        armor: hitTarget.armor,
+        shooterId: shooter.id
+      });
+
+      // Handle Kill
+      if (hitTarget.health <= 0) {
+        shooter.kills += 1;
+        shooter.score += isHead ? 150 : 100;
+        hitTarget.deaths += 1;
+
+        io.emit('killFeed', {
+          killerName: shooter.name,
+          victimName: hitTarget.name,
+          weapon: shotData.weapon,
+          isHeadshot: isHead
+        });
+
+        // Respawn after 3s
+        setTimeout(() => {
+          if (players[hitTarget.id]) {
+            const spawn = getRandomSpawn();
+            hitTarget.health = 100;
+            hitTarget.armor = 50;
+            hitTarget.x = spawn.x;
+            hitTarget.y = spawn.y;
+            hitTarget.z = spawn.z;
+            io.emit('playerRespawned', {
+              id: hitTarget.id,
+              x: hitTarget.x,
+              y: hitTarget.y,
+              z: hitTarget.z
+            });
+          }
+        }, 3000);
+      }
+    }
   });
 
-  // Handle Pickup collection
   socket.on('collectPickup', (pickupId) => {
     const p = players[socket.id];
     if (!p || p.health <= 0) return;
@@ -227,7 +214,7 @@ io.on('connection', (socket) => {
     const pickup = pickups.find(item => item.id === pickupId);
     if (pickup && pickup.respawnTimer <= 0) {
       if (pickup.type === 'health' && p.health < 100) {
-        p.health = Math.min(100, p.health + 40);
+        p.health = Math.min(100, p.health + 50);
         pickup.respawnTimer = 15;
       } else if (pickup.type === 'armor' && p.armor < 100) {
         p.armor = Math.min(100, p.armor + 50);
@@ -237,37 +224,21 @@ io.on('connection', (socket) => {
         pickup.respawnTimer = 10;
       }
 
-      io.emit('pickupCollected', { pickupId, respawnTime: pickup.respawnTimer, collectorId: p.id, playerHealth: p.health, playerArmor: p.armor });
+      io.emit('pickupCollected', { pickupId, collectorId: p.id, health: p.health, armor: p.armor });
     }
   });
 
-  // Handle Chat Message
-  socket.on('chatMessage', (msg) => {
-    const p = players[socket.id];
-    if (p && msg) {
-      io.emit('chatMessage', { sender: p.name, text: msg.substring(0, 80) });
-    }
-  });
-
-  // Handle disconnect
   socket.on('disconnect', () => {
-    console.log(`Player disconnected: ${socket.id}`);
     delete players[socket.id];
     io.emit('playerDisconnected', socket.id);
   });
 });
 
-// Server Game Loop (30 Ticks/sec)
-let lastTick = Date.now();
+// Tick Loop (40 Ticks/Sec for ultra smooth network sync)
 setInterval(() => {
-  const now = Date.now();
-  const dt = (now - lastTick) / 1000;
-  lastTick = now;
-
-  // Tick pickups respawn timers
   pickups.forEach(p => {
     if (p.respawnTimer > 0) {
-      p.respawnTimer -= dt;
+      p.respawnTimer -= 0.025;
       if (p.respawnTimer <= 0) {
         p.respawnTimer = 0;
         io.emit('pickupRespawned', p.id);
@@ -275,16 +246,12 @@ setInterval(() => {
     }
   });
 
-  // Broadcast world state containing ONLY real human players to all connected clients
   io.emit('worldUpdate', {
     players: players,
     onlineCount: Object.keys(players).length
   });
-}, 1000 / 30);
+}, 25);
 
 server.listen(PORT, () => {
-  console.log(`====================================================`);
-  console.log(`Tactical Strike 3D Server running on http://localhost:${PORT}`);
-  console.log(`Mode: PURE HUMAN MULTIPLAYER (NO BOTS)`);
-  console.log(`====================================================`);
+  console.log(`Tactical Strike 3D running on http://localhost:${PORT}`);
 });
