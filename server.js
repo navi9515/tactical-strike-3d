@@ -10,61 +10,38 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Game State
+// World Arena Bounds
+const WORLD_SIZE = 3000;
+const MAX_FOOD = 400;
+
 const players = {};
-const pickups = [
-  { id: 'hp1', type: 'health', x: -15, y: 0.5, z: -15, respawnTimer: 0 },
-  { id: 'hp2', type: 'health', x: 15, y: 0.5, z: 15, respawnTimer: 0 },
-  { id: 'arm1', type: 'armor', x: -15, y: 0.5, z: 15, respawnTimer: 0 },
-  { id: 'arm2', type: 'armor', x: 15, y: 0.5, z: -15, respawnTimer: 0 },
-  { id: 'ammo1', type: 'ammo', x: 0, y: 0.5, z: 0, respawnTimer: 0 }
-];
+const foodList = [];
 
-const SPAWNS = [
-  { x: -25, y: 1.6, z: -25 },
-  { x: 25, y: 1.6, z: -25 },
-  { x: -25, y: 1.6, z: 25 },
-  { x: 25, y: 1.6, z: 25 },
-  { x: 0, y: 1.6, z: -30 },
-  { x: 0, y: 1.6, z: 30 }
-];
-
-function getRandomSpawn() {
-  const p = SPAWNS[Math.floor(Math.random() * SPAWNS.length)];
-  return { x: p.x + (Math.random() - 0.5) * 2, y: p.y, z: p.z + (Math.random() - 0.5) * 2 };
+// Seed initial food dots
+for (let i = 0; i < MAX_FOOD; i++) {
+  spawnFood();
 }
 
-// Ray-Cylinder Hit Test for precision shooting
-function checkRayPlayerHit(rayOrigin, rayDir, target) {
-  // Target Bounding Cylinder
-  const targetPos = { x: target.x, y: target.y + 0.9, z: target.z };
-  const radius = 0.6;
-  const height = 1.8;
+function spawnFood(x, y, value, color) {
+  foodList.push({
+    id: `f_${Math.random().toString(36).substr(2, 9)}`,
+    x: x !== undefined ? x : Math.floor(Math.random() * (WORLD_SIZE - 200) + 100),
+    y: y !== undefined ? y : Math.floor(Math.random() * (WORLD_SIZE - 200) + 100),
+    value: value || 1,
+    color: color || getRandomColor()
+  });
+}
 
-  // Vector from origin to target center
-  const dx = targetPos.x - rayOrigin.x;
-  const dy = targetPos.y - rayOrigin.y;
-  const dz = targetPos.z - rayOrigin.z;
+function getRandomColor() {
+  const colors = ['#00f0ff', '#ff0055', '#f59e0b', '#10b981', '#a855f7', '#ec4899', '#3b82f6'];
+  return colors[Math.floor(Math.random() * colors.length)];
+}
 
-  // Projection along ray direction
-  const t = dx * rayDir.x + dy * rayDir.y + dz * rayDir.z;
-  if (t < 0 || t > 100) return null; // Behind shooter or out of range
-
-  // Closest point on ray
-  const closestX = rayOrigin.x + rayDir.x * t;
-  const closestY = rayOrigin.y + rayDir.y * t;
-  const closestZ = rayOrigin.z + rayDir.z * t;
-
-  // Distance from closest point to target center
-  const distSq = (closestX - targetPos.x) ** 2 + (closestZ - targetPos.z) ** 2;
-  const verticalDiff = Math.abs(closestY - targetPos.y);
-
-  if (distSq <= radius * radius && verticalDiff <= height / 2) {
-    const isHeadshot = closestY > (target.y + 1.4);
-    return { hit: true, distance: t, isHeadshot };
-  }
-
-  return null;
+function getRandomSpawn() {
+  return {
+    x: Math.floor(Math.random() * (WORLD_SIZE - 600) + 300),
+    y: Math.floor(Math.random() * (WORLD_SIZE - 600) + 300)
+  };
 }
 
 io.on('connection', (socket) => {
@@ -72,30 +49,31 @@ io.on('connection', (socket) => {
 
   socket.on('joinGame', (data) => {
     const spawn = getRandomSpawn();
-    const name = (data && data.name && data.name.trim()) ? data.name.trim().substring(0, 15) : `Operator_${socket.id.substring(0, 4)}`;
+    const name = (data && data.name && data.name.trim()) ? data.name.trim().substring(0, 15) : `Snake_${socket.id.substring(0, 4)}`;
 
     players[socket.id] = {
       id: socket.id,
       name: name,
+      color: data.color || '#00f0ff',
       x: spawn.x,
       y: spawn.y,
-      z: spawn.z,
-      rotationY: 0,
-      pitch: 0,
-      health: 100,
-      armor: 50,
-      kills: 0,
-      deaths: 0,
-      score: 0,
-      weapon: data.weapon || 'rifle',
-      isCrouching: false,
-      isSprinting: false
+      angle: Math.random() * Math.PI * 2,
+      score: 10,
+      length: 15,
+      isBoosting: false,
+      body: [] // Array of {x, y} segment positions
     };
+
+    // Initialize body segments
+    for (let i = 0; i < players[socket.id].length; i++) {
+      players[socket.id].body.push({ x: spawn.x - i * 10, y: spawn.y });
+    }
 
     socket.emit('initGameState', {
       selfId: socket.id,
+      worldSize: WORLD_SIZE,
       players: players,
-      pickups: pickups
+      food: foodList
     });
 
     socket.broadcast.emit('playerJoined', players[socket.id]);
@@ -103,155 +81,84 @@ io.on('connection', (socket) => {
 
   socket.on('playerUpdate', (data) => {
     const p = players[socket.id];
-    if (!p || p.health <= 0) return;
+    if (!p) return;
 
     p.x = data.x;
     p.y = data.y;
-    p.z = data.z;
-    p.rotationY = data.rotationY;
-    p.pitch = data.pitch;
-    p.isCrouching = data.isCrouching;
-    p.isSprinting = data.isSprinting;
-    p.weapon = data.weapon || p.weapon;
+    p.angle = data.angle;
+    p.isBoosting = data.isBoosting;
+    p.body = data.body || p.body;
+    p.score = data.score || p.score;
   });
 
-  socket.on('shoot', (shotData) => {
-    const shooter = players[socket.id];
-    if (!shooter || shooter.health <= 0) return;
+  socket.on('eatFood', (foodId) => {
+    const idx = foodList.findIndex(f => f.id === foodId);
+    if (idx !== -1) {
+      const food = foodList[idx];
+      foodList.splice(idx, 1);
 
-    // Broadcast shoot sound/tracer to other players
-    socket.broadcast.emit('weaponFired', {
-      shooterId: shooter.id,
-      weapon: shotData.weapon,
-      origin: shotData.origin,
-      direction: shotData.direction
-    });
-
-    // Check hit against all real players
-    let closestHit = null;
-    let closestDist = Infinity;
-    let hitTarget = null;
-
-    Object.values(players).forEach(target => {
-      if (target.id === shooter.id || target.health <= 0) return;
-
-      const hitInfo = checkRayPlayerHit(shotData.origin, shotData.direction, target);
-      if (hitInfo && hitInfo.distance < closestDist) {
-        closestDist = hitInfo.distance;
-        closestHit = hitInfo;
-        hitTarget = target;
-      }
-    });
-
-    if (hitTarget && closestHit) {
-      // Calculate damage
-      const baseDamage = shotData.weapon === 'sniper' ? 85 : (shotData.weapon === 'shotgun' ? 50 : 25);
-      const isHead = closestHit.isHeadshot;
-      let damage = baseDamage * (isHead ? 2.0 : 1.0);
-
-      // Apply armor reduction
-      if (hitTarget.armor > 0) {
-        const absorb = Math.min(hitTarget.armor, damage * 0.4);
-        hitTarget.armor -= absorb;
-        damage -= absorb;
+      const p = players[socket.id];
+      if (p) {
+        p.score += food.value;
+        p.length = Math.floor(15 + p.score / 2);
       }
 
-      hitTarget.health = Math.max(0, hitTarget.health - damage);
-
-      // Send hit confirmed to shooter
-      socket.emit('hitConfirmed', {
-        targetId: hitTarget.id,
-        damage: Math.round(damage),
-        isHeadshot: isHead,
-        isKill: hitTarget.health <= 0
-      });
-
-      // Send damage update to target
-      io.to(hitTarget.id).emit('playerHit', {
-        health: hitTarget.health,
-        armor: hitTarget.armor,
-        shooterId: shooter.id
-      });
-
-      // Handle Kill
-      if (hitTarget.health <= 0) {
-        shooter.kills += 1;
-        shooter.score += isHead ? 150 : 100;
-        hitTarget.deaths += 1;
-
-        io.emit('killFeed', {
-          killerName: shooter.name,
-          victimName: hitTarget.name,
-          weapon: shotData.weapon,
-          isHeadshot: isHead
-        });
-
-        // Respawn after 3s
-        setTimeout(() => {
-          if (players[hitTarget.id]) {
-            const spawn = getRandomSpawn();
-            hitTarget.health = 100;
-            hitTarget.armor = 50;
-            hitTarget.x = spawn.x;
-            hitTarget.y = spawn.y;
-            hitTarget.z = spawn.z;
-            io.emit('playerRespawned', {
-              id: hitTarget.id,
-              x: hitTarget.x,
-              y: hitTarget.y,
-              z: hitTarget.z
-            });
-          }
-        }, 3000);
+      // Maintain food count
+      if (foodList.length < MAX_FOOD) {
+        spawnFood();
       }
+
+      io.emit('foodEaten', { foodId, playerId: socket.id, newScore: p ? p.score : 0 });
     }
   });
 
-  socket.on('collectPickup', (pickupId) => {
+  socket.on('playerDied', (data) => {
     const p = players[socket.id];
-    if (!p || p.health <= 0) return;
-
-    const pickup = pickups.find(item => item.id === pickupId);
-    if (pickup && pickup.respawnTimer <= 0) {
-      if (pickup.type === 'health' && p.health < 100) {
-        p.health = Math.min(100, p.health + 50);
-        pickup.respawnTimer = 15;
-      } else if (pickup.type === 'armor' && p.armor < 100) {
-        p.armor = Math.min(100, p.armor + 50);
-        pickup.respawnTimer = 15;
-      } else if (pickup.type === 'ammo') {
-        socket.emit('ammoRefilled');
-        pickup.respawnTimer = 10;
+    if (p) {
+      // Explode snake body into large food orbs
+      if (p.body && p.body.length > 0) {
+        const step = Math.max(1, Math.floor(p.body.length / 20));
+        for (let i = 0; i < p.body.length; i += step) {
+          const seg = p.body[i];
+          spawnFood(seg.x + (Math.random() - 0.5) * 20, seg.y + (Math.random() - 0.5) * 20, 5, p.color);
+        }
       }
 
-      io.emit('pickupCollected', { pickupId, collectorId: p.id, health: p.health, armor: p.armor });
+      const killerName = data ? data.killerName : 'Barrier';
+      io.emit('killFeed', { killerName, victimName: p.name });
+
+      delete players[socket.id];
+      io.emit('playerDisconnected', socket.id);
+    }
+  });
+
+  socket.on('chatMessage', (msg) => {
+    const p = players[socket.id];
+    if (p && msg) {
+      io.emit('chatMessage', { sender: p.name, text: msg.substring(0, 80) });
     }
   });
 
   socket.on('disconnect', () => {
-    delete players[socket.id];
-    io.emit('playerDisconnected', socket.id);
+    const p = players[socket.id];
+    if (p) {
+      delete players[socket.id];
+      io.emit('playerDisconnected', socket.id);
+    }
   });
 });
 
-// Tick Loop (40 Ticks/Sec for ultra smooth network sync)
+// Server Game Loop (40 Ticks/sec)
 setInterval(() => {
-  pickups.forEach(p => {
-    if (p.respawnTimer > 0) {
-      p.respawnTimer -= 0.025;
-      if (p.respawnTimer <= 0) {
-        p.respawnTimer = 0;
-        io.emit('pickupRespawned', p.id);
-      }
-    }
-  });
-
   io.emit('worldUpdate', {
     players: players,
+    food: foodList,
     onlineCount: Object.keys(players).length
   });
 }, 25);
 
 server.listen(PORT, () => {
-  console.log(`Tactical Strike 3D running on http://localhost:${PORT}`);
+  console.log(`====================================================`);
+  console.log(`Super Slither Arena running on http://localhost:${PORT}`);
+  console.log(`====================================================`);
 });
