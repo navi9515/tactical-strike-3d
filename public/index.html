@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tactical Strike 3D - Realistic Multiplayer Action</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Teko:wght@500;700&family=Rajdhani:wght@600;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+  <!-- Three.js from CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <!-- Socket.io Client -->
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+
+  <!-- LOBBY SCREEN -->
+  <div id="lobby-screen" class="overlay-screen active">
+    <div class="lobby-card">
+      <div class="logo-container">
+        <h1 class="game-title">TACTICAL STRIKE <span>3D</span></h1>
+        <p class="game-subtitle">REAL-TIME MULTIPLAYER TACTICAL ARENA</p>
+      </div>
+
+      <div class="input-group">
+        <label for="player-name-input">OPERATOR CALLSIGN</label>
+        <input type="text" id="player-name-input" placeholder="Enter Callsign..." maxlength="15" value="Operator">
+      </div>
+
+      <div class="weapon-select-container">
+        <label>PRIMARY WEAPON LOADOUT</label>
+        <div class="weapon-grid">
+          <button class="weapon-card active" data-weapon="rifle">
+            <span class="weapon-title">M4A1 RIFLE</span>
+            <span class="weapon-desc">Balanced • High Fire Rate</span>
+          </button>
+          <button class="weapon-card" data-weapon="sniper">
+            <span class="weapon-title">AWM SNIPER</span>
+            <span class="weapon-desc">Extreme Damage • 4x Scope</span>
+          </button>
+          <button class="weapon-card" data-weapon="shotgun">
+            <span class="weapon-title">M4 SHOTGUN</span>
+            <span class="weapon-desc">Heavy Spread • Close Range</span>
+          </button>
+        </div>
+      </div>
+
+      <button id="btn-join" class="btn-primary">DEPLOY TO ARENA</button>
+
+      <div class="controls-guide">
+        <h3>CONTROLS</h3>
+        <div class="controls-grid">
+          <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Move</div>
+          <div><kbd>MOUSE</kbd> Aim & Look</div>
+          <div><kbd>LEFT CLICK</kbd> Fire Weapon</div>
+          <div><kbd>RIGHT CLICK</kbd> Aim Down Sights (ADS)</div>
+          <div><kbd>R</kbd> Reload</div>
+          <div><kbd>SHIFT</kbd> Sprint</div>
+          <div><kbd>SPACE</kbd> Jump</div>
+          <div><kbd>C</kbd> Crouch</div>
+          <div><kbd>1</kbd>-<kbd>4</kbd> Switch Weapon</div>
+          <div><kbd>TAB</kbd> Leaderboard</div>
+          <div><kbd>T</kbd> Chat</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GAME CANVAS CONTAINER -->
+  <div id="game-container"></div>
+
+  <!-- HUD OVERLAYS -->
+  <div id="hud-overlay" class="hud-hidden">
+    
+    <!-- Crosshair -->
+    <div id="crosshair">
+      <div class="ch-line top"></div>
+      <div class="ch-line bottom"></div>
+      <div class="ch-line left"></div>
+      <div class="ch-line right"></div>
+      <div class="ch-dot"></div>
+    </div>
+
+    <!-- Hitmarker -->
+    <div id="hitmarker">
+      <div class="hm-line top-left"></div>
+      <div class="hm-line top-right"></div>
+      <div class="hm-line bottom-left"></div>
+      <div class="hm-line bottom-right"></div>
+    </div>
+
+    <!-- Sniper Scope -->
+    <div id="sniper-scope">
+      <div class="scope-overlay">
+        <div class="scope-cross-v"></div>
+        <div class="scope-cross-h"></div>
+        <div class="scope-mil-dots"></div>
+      </div>
+    </div>
+
+    <!-- Directional Damage Flash -->
+    <div id="damage-flash"></div>
+
+    <!-- Top Info Bar: Kill Feed & Timer -->
+    <div class="top-hud">
+      <div class="match-info">
+        <span class="match-label">TACTICAL MATCH</span>
+        <span id="match-status">ONLINE</span>
+      </div>
+      <div id="kill-feed"></div>
+    </div>
+
+    <!-- Bottom Left: Health, Armor, Radar -->
+    <div class="bottom-left-hud">
+      <div class="radar-box">
+        <canvas id="radar-canvas" width="120" height="120"></canvas>
+      </div>
+
+      <div class="stats-bars">
+        <div class="stat-row">
+          <span class="stat-label">HP</span>
+          <div class="progress-bar health-bar">
+            <div id="health-fill" style="width: 100%;"></div>
+          </div>
+          <span id="health-val" class="stat-val">100</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">ARM</span>
+          <div class="progress-bar armor-bar">
+            <div id="armor-fill" style="width: 50%;"></div>
+          </div>
+          <span id="armor-val" class="stat-val">50</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Right: Weapon & Ammo Info -->
+    <div class="bottom-right-hud">
+      <div class="weapon-info-box">
+        <div id="hud-weapon-name" class="weapon-name">M4A1 RIFLE</div>
+        <div class="ammo-counter">
+          <span id="ammo-clip">30</span>
+          <span class="ammo-slash">/</span>
+          <span id="ammo-reserve">120</span>
+        </div>
+        <div id="reload-indicator" class="reload-text hidden">RELOADING...</div>
+      </div>
+    </div>
+
+    <!-- Chat Box -->
+    <div id="chat-container">
+      <div id="chat-messages"></div>
+      <input type="text" id="chat-input" placeholder="Press Enter to send chat..." maxlength="80">
+    </div>
+  </div>
+
+  <!-- RESPAWN SCREEN -->
+  <div id="respawn-screen" class="overlay-screen hidden">
+    <div class="respawn-card">
+      <h2 class="killed-by-title">KILLED IN ACTION</h2>
+      <p id="killed-by-text">Killed by Ghost_AI</p>
+      <div class="respawn-timer-container">
+        <span>RESPAWNING IN</span>
+        <span id="respawn-countdown">3</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- LEADERBOARD / SCOREBOARD MODAL -->
+  <div id="scoreboard-modal" class="overlay-screen hidden">
+    <div class="scoreboard-card">
+      <h2>TACTICAL SCOREBOARD</h2>
+      <table class="scoreboard-table">
+        <thead>
+          <tr>
+            <th>RANK</th>
+            <th>OPERATOR</th>
+            <th>KILLS</th>
+            <th>DEATHS</th>
+            <th>SCORE</th>
+          </tr>
+        </thead>
+        <tbody id="scoreboard-tbody">
+          <!-- Populated dynamically -->
+        </tbody>
+      </table>
+      <p class="tab-hint">Release [TAB] to close</p>
+    </div>
+  </div>
+
+  <!-- GAME SCRIPTS -->
+  <script src="js/audio.js"></script>
+  <script src="js/weapons.js"></script>
+  <script src="js/map.js"></script>
+  <script src="js/player.js"></script>
+  <script src="js/network.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
